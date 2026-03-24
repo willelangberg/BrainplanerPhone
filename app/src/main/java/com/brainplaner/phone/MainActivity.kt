@@ -4,14 +4,6 @@ import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -20,8 +12,10 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.brainplaner.phone.ui.login.LoginScreen
+import com.brainplaner.phone.ui.navigation.AppNavigation
+import com.brainplaner.phone.ui.theme.BrainplanerPhoneTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -41,7 +35,7 @@ class MainActivity : ComponentActivity() {
     // Cloud API Configuration
     // Use local network URL when on same Wi-Fi: http://192.168.0.23:8501
     // Use Render when remote: https://brainplaner-api-beta.onrender.com
-    private val CLOUD_API_URL = "http://192.168.0.23:8501"
+    private val CLOUD_API_URL = "https://brainplaner-api-beta.onrender.com"
     private val SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1obW1pYXFhcW9kZGxreXppYXRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc5NjQ2NDcsImV4cCI6MjA4MzU0MDY0N30.zN5bUHUWDqo2RASQkd-FQyTy01pwi_xFLVs2CpPZMXg"
     private val USER_TOKEN = SUPABASE_ANON_KEY  // For beta
 
@@ -50,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     // Track active session (phone is source of truth)
     private var activeSessionId: String? = null
+    private var activePlannedMinutes: Int = 60
     private var uiStateCallback: ((UiState) -> Unit)? = null
     private var isReceiverRegistered = false
 
@@ -66,11 +61,22 @@ class MainActivity : ComponentActivity() {
                 "com.brainplaner.phone.SESSION_AUTO_STARTED" -> {
                     val sessionId = intent.getStringExtra("session_id")
                     activeSessionId = sessionId
-                    uiStateCallback?.invoke(UiState.Success("✓ Session auto-started\n${sessionId?.take(8)}...\n🖥️ Initiated by PC"))
+                    // uiStateCallback is null when SessionControllerScreen isn't composed (user is on
+                    // HomeScreen). The session is still tracked; the callback fires once the user
+                    // navigates to the session screen.
+                    if (uiStateCallback != null) {
+                        uiStateCallback?.invoke(UiState.Success("✓ Session auto-started\n${sessionId?.take(8)}...\n🖥️ Initiated by PC"))
+                    } else {
+                        android.util.Log.d("MainActivity", "SESSION_AUTO_STARTED: uiStateCallback is null (user not on session screen)")
+                    }
                 }
                 "com.brainplaner.phone.SESSION_AUTO_STOPPED" -> {
                     activeSessionId = null
-                    uiStateCallback?.invoke(UiState.Success("✓ Session auto-stopped\n🖥️ Stopped by PC"))
+                    if (uiStateCallback != null) {
+                        uiStateCallback?.invoke(UiState.Success("✓ Session auto-stopped\n🖥️ Stopped by PC"))
+                    } else {
+                        android.util.Log.d("MainActivity", "SESSION_AUTO_STOPPED: uiStateCallback is null (user not on session screen)")
+                    }
                 }
             }
         }
@@ -81,13 +87,12 @@ class MainActivity : ComponentActivity() {
 
         // Check if user is logged in
         if (!UserAuth.isLoggedIn(this)) {
-            // Show login screen
             setContent {
-                MaterialTheme {
+                BrainplanerPhoneTheme {
                     LoginScreen(
                         onLogin = { userId ->
                             UserAuth.saveUserId(this, userId)
-                            recreate() // Restart activity after login
+                            recreate()
                         }
                     )
                 }
@@ -117,20 +122,24 @@ class MainActivity : ComponentActivity() {
         // Start polling service in background to detect PC-initiated sessions
         PhoneAwarenessService.startPollingMode(this)
 
-        val currentUserId = UserAuth.getUserId(this) ?: ""
+        val userId = UserAuth.getUserId(this) ?: return
 
         setContent {
-            MaterialTheme {
-                SessionControllerScreen(
-                    onStart = { startSession() },
-                    onStop  = { stopSession() },
+            BrainplanerPhoneTheme {
+                AppNavigation(
+                    userId = userId,
+                    apiUrl = CLOUD_API_URL,
+                    userToken = USER_TOKEN,
+                    supabaseUrl = SUPABASE_URL,
+                    getActiveSessionId = { activeSessionId },
+                    onStartSession = { minutes -> startSession(minutes) },
+                    onStopSession = { stopSession() },
                     onLogout = {
                         PhoneAwarenessService.stop(this)
                         UserAuth.clearUserId(this)
                         recreate()
                     },
-                    userId = currentUserId,
-                    onStateChanged = { callback -> uiStateCallback = callback }
+                    onStateChanged = { callback -> uiStateCallback = callback },
                 )
             }
         }
@@ -150,7 +159,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // Create session directly via Supabase (fallback when Cloud API is down/misconfigured)
-    private suspend fun createSessionDirectly(userId: String): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun createSessionDirectly(userId: String, plannedMinutes: Int = 60): Result<String> = withContext(Dispatchers.IO) {
         try {
             val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
@@ -202,7 +211,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // Start = POST to Cloud API /sessions/start
-    private suspend fun startSession(): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun startSession(plannedMinutes: Int = 60): Result<String> = withContext(Dispatchers.IO) {
         try {
             val userId = UserAuth.getUserId(this@MainActivity) ?: return@withContext Result.failure(
                 Exception("No user logged in")
@@ -214,7 +223,7 @@ class MainActivity : ComponentActivity() {
 
             val json = """
                 {
-                  "planned_minutes": 60
+                  "planned_minutes": $plannedMinutes
                 }
             """.trimIndent()
 
@@ -243,6 +252,7 @@ class MainActivity : ComponentActivity() {
 
                     if (sessionId != null) {
                         activeSessionId = sessionId
+                        activePlannedMinutes = plannedMinutes
                         android.util.Log.i("MainActivity", "Session started: $sessionId")
                         // Start phone awareness tracking
                         PhoneAwarenessService.start(this@MainActivity, sessionId)
@@ -255,12 +265,31 @@ class MainActivity : ComponentActivity() {
                     val errorBody = response.body?.string() ?: ""
                     android.util.Log.e("MainActivity", "HTTP error ${response.code}: $errorBody")
 
-                    // Cloud API returned error - fall back to Supabase directly
+                    // 409 = active session already exists — auto-end it and retry
+                    if (response.code == 409 || (response.code == 500 && errorBody.contains("active session"))) {
+                        val staleId = Regex("""[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}""")
+                            .find(errorBody)?.value
+                        if (staleId != null) {
+                            android.util.Log.i("MainActivity", "Auto-ending stale session: $staleId")
+                            val endReq = Request.Builder()
+                                .url("$CLOUD_API_URL/sessions/$staleId/end")
+                                .post("{}".toRequestBody("application/json".toMediaType()))
+                                .addHeader("Authorization", "Bearer $USER_TOKEN")
+                                .addHeader("X-User-ID", userId)
+                                .build()
+                            runCatching { client.newCall(endReq).execute().close() }
+                            // Retry start
+                            return@withContext startSession(plannedMinutes)
+                        }
+                    }
+
+                    // Other Cloud API error - fall back to Supabase directly
                     android.util.Log.i("MainActivity", "Cloud API error ${response.code}, falling back to Supabase")
-                    val directResult = createSessionDirectly(userId)
+                    val directResult = createSessionDirectly(userId, plannedMinutes)
                     return@withContext directResult.fold(
                         onSuccess = { sessionId ->
                             activeSessionId = sessionId
+                            activePlannedMinutes = plannedMinutes
                             PhoneAwarenessService.start(this@MainActivity, sessionId)
                             Result.success("✓ Started session (direct)\n${sessionId.take(8)}...\n📱 Tracking active")
                         },
@@ -275,10 +304,11 @@ class MainActivity : ComponentActivity() {
             // Cloud API unreachable (DNS error, timeout, etc.) - fall back to Supabase
             val userId = UserAuth.getUserId(this@MainActivity)
             if (userId != null) {
-                val directResult = createSessionDirectly(userId)
+                val directResult = createSessionDirectly(userId, plannedMinutes)
                 return@withContext directResult.fold(
                     onSuccess = { sessionId ->
                         activeSessionId = sessionId
+                        activePlannedMinutes = plannedMinutes
                         PhoneAwarenessService.start(this@MainActivity, sessionId)
                         Result.success("✓ Started session (direct)\n${sessionId.take(8)}...\n📱 Tracking active")
                     },
@@ -343,7 +373,7 @@ class MainActivity : ComponentActivity() {
 
         val json = """
             {
-              "planned_minutes": 60
+              "planned_minutes": $activePlannedMinutes
             }
         """.trimIndent()
 
@@ -418,175 +448,4 @@ sealed class UiState {
     object Loading : UiState()
     data class Success(val message: String) : UiState()
     data class Error(val message: String) : UiState()
-}
-
-@Composable
-fun SessionControllerScreen(
-    onStart: suspend () -> Result<String>,
-    onStop: suspend () -> Result<String>,
-    onLogout: () -> Unit,
-    userId: String,
-    onStateChanged: ((UiState) -> Unit) -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    var uiState by remember { mutableStateOf<UiState>(UiState.Idle) }
-
-    // Register state callback
-    DisposableEffect(Unit) {
-        onStateChanged { newState -> uiState = newState }
-        onDispose { }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "Brainplaner Phone Controller",
-            style = MaterialTheme.typography.titleLarge
-        )
-
-        Text(
-            "User: ${userId.take(8)}...",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        // Status display with proper states
-        when (val state = uiState) {
-            is UiState.Idle -> Text("Ready", style = MaterialTheme.typography.bodyLarge)
-            is UiState.Loading -> CircularProgressIndicator()
-            is UiState.Success -> Text(
-                state.message,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.primary
-            )
-            is UiState.Error -> Text(
-                "Error: ${state.message}",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        val isLoading = uiState is UiState.Loading
-
-        Button(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading,
-            onClick = {
-                scope.launch {
-                    uiState = UiState.Loading
-                    val result = onStart()
-                    uiState = result.fold(
-                        onSuccess = { UiState.Success(it) },
-                        onFailure = { UiState.Error(it.message ?: "Unknown error") }
-                    )
-                }
-            }
-        ) {
-            Text("Start Session")
-        }
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading,
-            onClick = {
-                scope.launch {
-                    uiState = UiState.Loading
-                    val result = onStop()
-                    uiState = result.fold(
-                        onSuccess = { UiState.Success(it) },
-                        onFailure = { UiState.Error(it.message ?: "Unknown error") }
-                    )
-                }
-            }
-        ) {
-            Text("Stop Session")
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        TextButton(
-            onClick = onLogout
-        ) {
-            Text("Switch User / Logout", color = MaterialTheme.colorScheme.error)
-        }
-    }
-}
-
-@Composable
-fun LoginScreen(onLogin: (String) -> Unit) {
-    var userId by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "🔐 Brainplaner Beta",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            "Welcome! Enter your user ID to get started.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        OutlinedTextField(
-            value = userId,
-            onValueChange = {
-                userId = it
-                errorMessage = null
-            },
-            label = { Text("User ID") },
-            placeholder = { Text("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            isError = errorMessage != null
-        )
-
-        if (errorMessage != null) {
-            Text(
-                errorMessage!!,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
-            onClick = {
-                when {
-                    userId.isBlank() -> {
-                        errorMessage = "Please enter your user ID"
-                    }
-                    userId.length != 36 -> {
-                        errorMessage = "Invalid format. Should be 36 characters (UUID)"
-                    }
-                    else -> {
-                        onLogin(userId)
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Login")
-        }
-    }
 }
