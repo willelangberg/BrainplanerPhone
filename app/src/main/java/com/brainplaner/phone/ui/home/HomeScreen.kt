@@ -40,9 +40,16 @@ fun HomeScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        // Readiness score — populated once the /readiness backend endpoint exists.
-        Text("Estimated Readiness", style = MaterialTheme.typography.labelMedium)
-        Text(state.readinessScore ?: "—", style = MaterialTheme.typography.displaySmall)
+        // Brain Budget score
+        Text("Brain Budget", style = MaterialTheme.typography.labelMedium)
+        if (state.isLoading) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+        } else {
+            Text(
+                state.readinessScore?.let { "$it / 100" } ?: "—",
+                style = MaterialTheme.typography.displaySmall,
+            )
+        }
 
         HorizontalDivider()
 

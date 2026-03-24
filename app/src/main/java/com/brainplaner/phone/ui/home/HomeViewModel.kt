@@ -23,6 +23,7 @@ data class HomeUiState(
     val readinessScore: String? = null,
     val hasCheckedInToday: Boolean = false,
     val isCheckInSubmitting: Boolean = false,
+    val checkInError: String? = null,      // non-null when last submit failed
 )
 
 class HomeViewModel(
@@ -33,8 +34,9 @@ class HomeViewModel(
 
     // Reuse the same OkHttp pattern already established in MainActivity.
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(70, TimeUnit.SECONDS)
+        .readTimeout(70, TimeUnit.SECONDS)
+        .callTimeout(75, TimeUnit.SECONDS)
         .build()
 
     private val _state = MutableStateFlow(HomeUiState())
@@ -47,13 +49,13 @@ class HomeViewModel(
     fun load() {
         viewModelScope.launch {
             _state.value = HomeUiState(isLoading = true)
-            // Fetch brief, readiness, and today's check-in status in parallel.
+            // Single /readiness call gives both score and has_checkin_today.
             val brief = async { fetchBrief() }
-            val readiness = async { fetchReadiness() }
-            val checkedIn = async { fetchCheckedInToday() }
+            val readinessData = async { fetchReadinessData() }
+            val (score, hasCheckin) = readinessData.await()
             _state.value = brief.await().copy(
-                readinessScore = readiness.await(),
-                hasCheckedInToday = checkedIn.await(),
+                readinessScore = score,
+                hasCheckedInToday = hasCheckin,
             )
         }
     }
@@ -77,7 +79,6 @@ class HomeViewModel(
                         handoffNextAction = extractString(body, "handoff_next_action"),
                     )
                 } else {
-                    // Degrade gracefully — user is not blocked if the endpoint is unavailable.
                     HomeUiState(isLoading = false)
                 }
             }
@@ -89,9 +90,8 @@ class HomeViewModel(
     private fun extractString(json: String, key: String): String? =
         Regex(""""$key"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
 
-    // Fetches the user's readiness score from the backend. Returns null when the
-    // /readiness endpoint isn't available yet — HomeScreen shows "—" in that case.
-    private suspend fun fetchReadiness(): String? = withContext(Dispatchers.IO) {
+    // Single call to /readiness — returns (scoreString, hasCheckinToday).
+    private suspend fun fetchReadinessData(): Pair<String?, Boolean> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("$apiUrl/readiness")
@@ -101,42 +101,22 @@ class HomeViewModel(
                 .build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    val body = response.body?.string() ?: return@use null
-                    // score is a JSON number, e.g. "score": 74
-                    Regex(""""score"\s*:\s*(\d+)""").find(body)?.groupValues?.get(1)
-                } else null
+                    val body = response.body?.string() ?: return@use Pair(null, false)
+                    val score = Regex(""""score"\s*:\s*(\d+)""").find(body)?.groupValues?.get(1)
+                    val hasCheckin = Regex(""""has_checkin_today"\s*:\s*(true|false)""")
+                        .find(body)?.groupValues?.get(1) == "true"
+                    Pair(score, hasCheckin)
+                } else Pair(null, false)
             }
         } catch (e: Exception) {
-            null
-        }
-    }
-
-    // Returns true if there is already a daily_inputs row for today (UTC date).
-    // Checked via the /readiness endpoint — has_checkin_today is included in the response.
-    private suspend fun fetchCheckedInToday(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder()
-                .url("$apiUrl/readiness")
-                .get()
-                .addHeader("Authorization", "Bearer $userToken")
-                .addHeader("X-User-ID", userId)
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: return@use false
-                    Regex(""""has_checkin_today"\s*:\s*(true|false)""").find(body)
-                        ?.groupValues?.get(1) == "true"
-                } else false
-            }
-        } catch (e: Exception) {
-            false
+            Pair(null, false)
         }
     }
 
     // Posts today's sleep check-in via Cloud API (avoids Supabase RLS with anon key).
     fun submitCheckIn(sleepHours: Float, sleepScore: Int, rhr: Int?) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(isCheckInSubmitting = true)
+            _state.value = _state.value.copy(isCheckInSubmitting = true, checkInError = null)
             val success = withContext(Dispatchers.IO) {
                 try {
                     val rhrJson = if (rhr != null) ""","rhr":$rhr""" else ""
@@ -157,7 +137,10 @@ class HomeViewModel(
             if (success) {
                 load()
             } else {
-                _state.value = _state.value.copy(isCheckInSubmitting = false)
+                _state.value = _state.value.copy(
+                    isCheckInSubmitting = false,
+                    checkInError = "Could not save. Server may be waking up — try again.",
+                )
             }
         }
     }
