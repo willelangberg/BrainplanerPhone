@@ -65,6 +65,8 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     onStartSession: suspend (plannedMinutes: Int) -> Result<String>,
     onStopSession: suspend () -> Result<String>,
+    onPauseSession: suspend () -> Result<String>,
+    onResumeSession: suspend () -> Result<String>,
     onBudgetDetail: () -> Unit,
 ){
     val state by viewModel.state.collectAsState()
@@ -77,6 +79,9 @@ fun HomeScreen(
     var actionMessage by remember { mutableStateOf<String?>(null) }
     var isActionLoading by remember { mutableStateOf(false) }
     var previousOffline by remember { mutableStateOf(false) }
+    var isPaused by remember { mutableStateOf(false) }
+    var totalPauseMs by remember { mutableLongStateOf(0L) }
+    var pauseStartMs by remember { mutableLongStateOf(0L) }
 
     val context = LocalContext.current
 
@@ -84,6 +89,9 @@ fun HomeScreen(
         val activeSession = LocalStore.getActiveSession(context) ?: return@LaunchedEffect
         activePlannedMinutes = activeSession.plannedMinutes
         sessionStartMs = activeSession.startMs
+        isPaused = activeSession.isPaused
+        totalPauseMs = activeSession.totalPauseMs
+        pauseStartMs = activeSession.pauseStartMs
         isSessionActive = true
     }
 
@@ -104,13 +112,17 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(isSessionActive, sessionStartMs) {
+    LaunchedEffect(isSessionActive, sessionStartMs, isPaused) {
         if (!isSessionActive || sessionStartMs <= 0L) {
             elapsedSeconds = 0L
             return@LaunchedEffect
         }
         while (isSessionActive) {
-            elapsedSeconds = ((System.currentTimeMillis() - sessionStartMs) / 1000L).coerceAtLeast(0L)
+            val now = System.currentTimeMillis()
+            val wallClock = now - sessionStartMs
+            val currentPauseTime = if (isPaused && pauseStartMs > 0L) now - pauseStartMs else 0L
+            val totalPause = totalPauseMs + currentPauseTime
+            elapsedSeconds = ((wallClock - totalPause) / 1000L).coerceAtLeast(0L)
             delay(1000L)
         }
     }
@@ -224,79 +236,6 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ── Pending recovery banner ──
-        var pendingRecovery by remember {
-            mutableStateOf(LocalStore.getPendingRecovery(context))
-        }
-        pendingRecovery?.let { recovery ->
-            val minutesAgo = ((System.currentTimeMillis() - recovery.selectedAt) / 60_000).toInt()
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = BudgetGreen.copy(alpha = 0.12f),
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    BudgetGreen.copy(alpha = 0.4f),
-                ),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "${recovery.emoji} ${recovery.type} in progress",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        )
-                        Text(
-                            if (minutesAgo < 1) "just now" else "${minutesAgo}m ago",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "+${recovery.boostPoints} budget when confirmed",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = BudgetGreen,
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                viewModel.applyRecoveryBoost(recovery.boostPoints)
-                                LocalStore.clearPendingRecovery(context)
-                                pendingRecovery = null
-                            },
-                            modifier = Modifier.weight(1f).height(44.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = BudgetGreen,
-                            ),
-                        ) {
-                            Text("✅ Done!", style = MaterialTheme.typography.labelLarge)
-                        }
-                        TextButton(
-                            onClick = {
-                                LocalStore.clearPendingRecovery(context)
-                                pendingRecovery = null
-                            },
-                        ) {
-                            Text("Dismiss", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
         // ── Continuity / handoff card ──
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -407,9 +346,9 @@ fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        if (isOvertime) "OVERTIME" else "SESSION ACTIVE",
+                        if (isPaused) "PAUSED" else if (isOvertime) "OVERTIME" else "SESSION ACTIVE",
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (isOvertime) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        color = if (isPaused) BudgetYellow else if (isOvertime) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                         letterSpacing = 2.sp,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
@@ -442,7 +381,55 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ── Pause / Resume button ──
+            Button(
+                onClick = {
+                    if (isActionLoading) return@Button
+                    scope.launch {
+                        isActionLoading = true
+                        if (isPaused) {
+                            val result = onResumeSession()
+                            actionMessage = result.fold(
+                                onSuccess = {
+                                    totalPauseMs += System.currentTimeMillis() - pauseStartMs
+                                    pauseStartMs = 0L
+                                    isPaused = false
+                                    it
+                                },
+                                onFailure = { e -> "Error: ${e.message ?: "Failed to resume"}" },
+                            )
+                        } else {
+                            val result = onPauseSession()
+                            actionMessage = result.fold(
+                                onSuccess = {
+                                    pauseStartMs = System.currentTimeMillis()
+                                    isPaused = true
+                                    it
+                                },
+                                onFailure = { e -> "Error: ${e.message ?: "Failed to pause"}" },
+                            )
+                        }
+                        isActionLoading = false
+                    }
+                },
+                enabled = !isActionLoading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isPaused) BudgetGreen else BudgetYellow,
+                ),
+            ) {
+                Text(
+                    if (isPaused) "▶  Resume" else "⏸  Pause",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             Button(
                 onClick = {
@@ -454,6 +441,9 @@ fun HomeScreen(
                             onSuccess = {
                                 isSessionActive = false
                                 sessionStartMs = 0L
+                                isPaused = false
+                                totalPauseMs = 0L
+                                pauseStartMs = 0L
                                 viewModel.load()
                                 it
                             },

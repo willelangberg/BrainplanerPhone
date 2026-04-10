@@ -54,6 +54,30 @@ class PhoneAwarenessService : Service() {
     private var lastScreenState = "unknown"
     private var pollingJob: Job? = null
     private var isAutoDetected = false
+    private var isSessionPaused = false  // Synced from LocalStore
+
+    private val pauseResumeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.brainplaner.phone.SESSION_PAUSED" -> {
+                    isSessionPaused = true
+                    android.util.Log.i("PhoneAwareness", "Received pause signal, event logging suspended")
+                    updateNotification()
+                }
+                "com.brainplaner.phone.SESSION_RESUMED" -> {
+                    val resumedSessionId = intent.getStringExtra("session_id")
+                    if (isInCooldown && resumedSessionId != null && cooldownSessionId == resumedSessionId) {
+                        // Recover from accidental cooldown trigger on a session that is actually resumed.
+                        sessionId = resumedSessionId
+                        cancelCooldown("resume broadcast for active session")
+                    }
+                    isSessionPaused = false
+                    android.util.Log.i("PhoneAwareness", "Received resume signal, event logging resumed")
+                    updateNotification()
+                }
+            }
+        }
+    }
 
     // Cooldown tracking — continues after session ends to measure post-session behavior
     private val COOLDOWN_DURATION_MS = 15 * 60 * 1000L // 15 minutes
@@ -86,7 +110,7 @@ class PhoneAwarenessService : Service() {
                         screenOnStartTime = System.currentTimeMillis()
                         updateNotification()
                         logEvent("screen_on", mapOf("phase" to "cooldown"))
-                    } else {
+                    } else if (!isSessionPaused) {
                         // Active session phase: original behavior
                         if (lastScreenState == "off" && sessionId != null) {
                             unlockCount++
@@ -98,6 +122,8 @@ class PhoneAwarenessService : Service() {
                         updateNotification()
                         android.util.Log.i("PhoneAwareness", "Event: screen_on")
                         logEvent("screen_on")
+                    } else {
+                        lastScreenState = "on"
                     }
                 }
                 Intent.ACTION_SCREEN_OFF -> {
@@ -107,7 +133,7 @@ class PhoneAwarenessService : Service() {
                         if (isInCooldown) {
                             cooldownScreenOnSeconds += duration.toInt()
                             android.util.Log.i("PhoneAwareness", "Cooldown: screen on for ${duration}s, total: ${cooldownScreenOnSeconds}s")
-                        } else {
+                        } else if (!isSessionPaused) {
                             screenOnSeconds += duration.toInt()
                             android.util.Log.i("PhoneAwareness", "Screen was on for ${duration}s, total: ${screenOnSeconds}s")
                         }
@@ -116,7 +142,7 @@ class PhoneAwarenessService : Service() {
                     updateNotification()
                     if (isInCooldown) {
                         logEvent("screen_off", mapOf("phase" to "cooldown"))
-                    } else {
+                    } else if (!isSessionPaused) {
                         android.util.Log.i("PhoneAwareness", "Event: screen_off")
                         logEvent("screen_off")
                     }
@@ -133,7 +159,7 @@ class PhoneAwarenessService : Service() {
                         android.util.Log.i("PhoneAwareness", "Cooldown: unlock USER_PRESENT (count=$cooldownUnlockCount)")
                         logEvent("unlock", mapOf("unlock_count" to cooldownUnlockCount, "phase" to "cooldown"))
                         updateNotification()
-                    } else if (sessionId != null) {
+                    } else if (sessionId != null && !isSessionPaused) {
                         unlockCount++
                         android.util.Log.i("PhoneAwareness", "Event: unlock from USER_PRESENT (count=$unlockCount)")
                         logEvent("unlock", mapOf("unlock_count" to unlockCount))
@@ -158,6 +184,9 @@ class PhoneAwarenessService : Service() {
             // Don't initialize USER_ID yet, will be set later
         }
 
+        // Load pause state from LocalStore
+        syncPauseStateFromLocalStore()
+
         // Register screen state listeners
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -165,11 +194,19 @@ class PhoneAwarenessService : Service() {
             addAction(Intent.ACTION_USER_PRESENT)
         }
 
+        // Register broadcast receiver for pause/resume signals
+        val pauseResumeFilter = IntentFilter().apply {
+            addAction("com.brainplaner.phone.SESSION_PAUSED")
+            addAction("com.brainplaner.phone.SESSION_RESUMED")
+        }
+
         // Android 13+ requires explicit export flag for broadcast receivers
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(pauseResumeReceiver, pauseResumeFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(screenReceiver, filter)
+            registerReceiver(pauseResumeReceiver, pauseResumeFilter)
         }
 
         createNotificationChannel()
@@ -220,8 +257,12 @@ class PhoneAwarenessService : Service() {
             // Preserve counters when upgrading local session id -> cloud session id.
             val previousSessionId = sessionId
             val isUpgradeFromLocal = previousSessionId?.startsWith("local-") == true && !newSessionId.startsWith("local-")
+            if (isInCooldown) {
+                cancelCooldown("manual session start")
+            }
             sessionId = newSessionId
             isAutoDetected = false
+            isSessionPaused = false
 
             if (isUpgradeFromLocal) {
                 android.util.Log.i("PhoneAwareness", "Upgraded local session to cloud id: $previousSessionId -> $newSessionId")
@@ -256,6 +297,12 @@ class PhoneAwarenessService : Service() {
 
         try {
             unregisterReceiver(screenReceiver)
+        } catch (_: Exception) {
+            // Receiver might not be registered
+        }
+
+        try {
+            unregisterReceiver(pauseResumeReceiver)
         } catch (_: Exception) {
             // Receiver might not be registered
         }
@@ -524,6 +571,21 @@ class PhoneAwarenessService : Service() {
         }
     }
 
+    private fun cancelCooldown(reason: String) {
+        if (!isInCooldown) return
+
+        android.util.Log.i("PhoneAwareness", "Cancelling cooldown: $reason")
+        cooldownTimerJob?.cancel()
+        isInCooldown = false
+        cooldownSessionId = null
+        cooldownStartTime = null
+        cooldownUnlockCount = 0
+        cooldownScreenOnSeconds = 0
+        cooldownTimerJob = null
+        timeToFirstPickupSeconds = null
+        updateNotification()
+    }
+
     private fun submitCooldownMetrics(
         sessionId: String,
         userId: String,
@@ -648,6 +710,23 @@ class PhoneAwarenessService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun syncPauseStateFromLocalStore() {
+        try {
+            val activeSession = LocalStore.getActiveSession(this)
+            if (activeSession != null && activeSession.id == sessionId) {
+                isSessionPaused = activeSession.isPaused
+                android.util.Log.d("PhoneAwareness", "Synced pause state from LocalStore: isPaused=$isSessionPaused, sessionId=${activeSession.id}")
+            } else if (sessionId == null && activeSession != null) {
+                // Service restarted, load session from LocalStore
+                sessionId = activeSession.id
+                isSessionPaused = activeSession.isPaused
+                android.util.Log.i("PhoneAwareness", "Restored session from LocalStore: id=$sessionId, isPaused=$isSessionPaused")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PhoneAwareness", "Error syncing pause state from LocalStore", e)
+        }
+    }
+
     private fun startPolling() {
         pollingJob?.cancel()
         android.util.Log.i("PhoneAwareness", "=== Starting polling loop (interval=${POLL_INTERVAL_MS}ms, user=$USER_ID) ===")
@@ -714,15 +793,35 @@ class PhoneAwarenessService : Service() {
                     return@withContext
                 }
 
-                android.util.Log.d("PhoneAwareness", "Poll: remote=$remoteId/$remoteStatus, local=$sessionId")
+                android.util.Log.d("PhoneAwareness", "Poll: remote=$remoteId/$remoteStatus, local=$sessionId, cooldown=$isInCooldown/$cooldownSessionId")
+
+                // Keep paused flag aligned with persisted local-first state.
+                syncPauseStateFromLocalStore()
 
                 // Sync logic: match Supabase state
                 when {
+                    remoteStatus == "active" && isInCooldown && cooldownSessionId == remoteId -> {
+                        // Session resumed while cooldown was active (e.g. stale poll race): recover active tracking.
+                        sessionId = remoteId
+                        isAutoDetected = false
+                        isSessionPaused = false
+                        cancelCooldown("remote session is active again")
+                    }
+                    remoteStatus == "active" && sessionId == remoteId && isSessionPaused -> {
+                        // Session resumed remotely — clear paused flag, keep counters intact
+                        android.util.Log.i("PhoneAwareness", "Session $remoteId resumed remotely")
+                        isSessionPaused = false
+                        updateNotification()
+                    }
                     remoteStatus == "active" && sessionId != remoteId -> {
                         // New session started remotely (by PC) or detected on startup
                         android.util.Log.i("PhoneAwareness", "Auto-detected new session: $remoteId (was: $sessionId)")
+                        if (isInCooldown) {
+                            cancelCooldown("new active session detected")
+                        }
                         sessionId = remoteId
                         isAutoDetected = true
+                        isSessionPaused = false
                         unlockCount = 0
                         screenOnSeconds = 0
                         screenOnStartTime = if (lastScreenState == "on") System.currentTimeMillis() else null
@@ -736,12 +835,19 @@ class PhoneAwarenessService : Service() {
                             putExtra("session_id", remoteId)
                         })
                     }
-                    remoteStatus != "active" && sessionId != null && !isInCooldown -> {
-                        // Session stopped remotely (by PC) — enter cooldown phase instead of stopping
+                    remoteStatus == "paused" && sessionId != null && sessionId == remoteId && !isSessionPaused -> {
+                        // Session paused — suspend event counting but do NOT start cooldown
+                        android.util.Log.i("PhoneAwareness", "Session $sessionId paused remotely — suspending event tracking")
+                        isSessionPaused = true
+                        updateNotification()
+                    }
+                    remoteStatus != "active" && remoteStatus != "paused" && sessionId != null && sessionId == remoteId && !isInCooldown -> {
+                        // Session truly ended (completed/cancelled) — enter cooldown phase
                         android.util.Log.i("PhoneAwareness", "Session completed: $sessionId — entering cooldown phase (${ COOLDOWN_DURATION_MS / 60000 } min)")
                         val completedSessionId = sessionId
                         sessionId = null  // no longer an active session
                         isAutoDetected = false
+                        isSessionPaused = false
 
                         // Start cooldown tracking
                         startCooldown(completedSessionId!!)
@@ -936,6 +1042,8 @@ class PhoneAwarenessService : Service() {
 
         val title = if (isInCooldown) {
             "Brainplaner Cooldown"
+        } else if (isSessionPaused) {
+            "Brainplaner Tracking Paused"
         } else if (sessionId != null) {
             "Brainplaner Tracking Active" + if (isAutoDetected) " (Auto)" else ""
         } else {
@@ -946,6 +1054,8 @@ class PhoneAwarenessService : Service() {
             val elapsed = cooldownStartTime?.let { (System.currentTimeMillis() - it) / 60000 } ?: 0
             val remaining = (COOLDOWN_DURATION_MS / 60000) - elapsed
             "Post-session tracking: ${remaining}min left | Unlocks: $cooldownUnlockCount"
+        } else if (isSessionPaused) {
+            "Session paused | Unlocks so far: $unlockCount"
         } else if (sessionId != null) {
             "Unlocks: $unlockCount | Screen: $lastScreenState"
         } else {

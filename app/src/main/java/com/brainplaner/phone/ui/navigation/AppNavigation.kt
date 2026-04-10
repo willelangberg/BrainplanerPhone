@@ -6,7 +6,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -16,6 +15,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavHostController
@@ -45,6 +46,8 @@ fun AppNavigation(
     getActiveSessionId: () -> String?,
     onStartSession: suspend (plannedMinutes: Int) -> Result<String>,
     onStopSession: suspend () -> Result<String>,
+    onPauseSession: suspend () -> Result<String>,
+    onResumeSession: suspend () -> Result<String>,
     onLogout: () -> Unit,
     navController: NavHostController = rememberNavController(),
 ) {
@@ -53,6 +56,9 @@ fun AppNavigation(
     val homeViewModel: HomeViewModel = viewModel(
         factory = HomeViewModel.appFactory(application, userId, apiUrl, userToken)
     )
+    val pendingReflectionSessionId = LocalStore.getPendingReflectionRouteSessionId(application)
+    val startDestination = pendingReflectionSessionId?.let { Screen.Reflection.route(it) }
+        ?: Screen.CognitiveWarmup.route
 
     val navItems = listOf(
         NavItem("Home", Screen.Home.route) { Icon(Icons.Default.Home, contentDescription = "Home") },
@@ -94,7 +100,7 @@ fun AppNavigation(
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Screen.CognitiveWarmup.route,
+            startDestination = startDestination,
             modifier = if (showBottomBar) Modifier.padding(innerPadding) else Modifier,
         ) {
             composable(Screen.CognitiveWarmup.route) {
@@ -140,12 +146,16 @@ fun AppNavigation(
                         val sessionId = getActiveSessionId()
                         val result = onStopSession()
                         if (result.isSuccess && sessionId != null) {
+                            LocalStore.savePendingReflectionRoute(application, sessionId)
+                            LocalStore.savePendingReflectionStage(application, LocalStore.REFLECTION_STAGE_FORM)
                             navController.navigate(Screen.Reflection.route(sessionId)) {
                                 popUpTo(Screen.Home.route)
                             }
                         }
                         result
                     },
+                    onPauseSession = onPauseSession,
+                    onResumeSession = onResumeSession,
                     onBudgetDetail = {
                         navController.navigate(Screen.BudgetDetail.route)
                     },
@@ -173,11 +183,18 @@ fun AppNavigation(
             ) { backStackEntry ->
                 val sessionId = backStackEntry.arguments?.getString("sessionId") ?: ""
                 val vm: ReflectionViewModel = viewModel(
-                    factory = ReflectionViewModel.factory(application, sessionId, userId, apiUrl, userToken)
+                    factory = object : ViewModelProvider.Factory {
+                        @Suppress("UNCHECKED_CAST")
+                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                            return ReflectionViewModel(application, sessionId, userId, apiUrl, userToken) as T
+                        }
+                    }
                 )
                 ReflectionScreen(
                     viewModel = vm,
                     onDone = {
+                        LocalStore.clearPendingReflectionRoute(application)
+                        homeViewModel.refreshCloudData()
                         navController.navigate(Screen.Home.route) {
                             popUpTo(Screen.Home.route) { inclusive = true }
                         }

@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -53,52 +54,54 @@ fun BudgetDetailScreen(
     val context = LocalContext.current
     val score = state.readinessScore?.toIntOrNull() ?: 0
 
+    LaunchedEffect(Unit) {
+        viewModel.refreshCloudData()
+    }
+
     val checkInData = LocalStore.getCheckInData(context)
-    val sleepHours = checkInData?.first
-    val sleepScore = checkInData?.second
     val pendingRecovery = LocalStore.getPendingRecovery(context)
+    val breakdown = state.readinessBreakdown
 
     // ── 3 simple categories ──
 
-    // HEALTH: summarize sleep into one line
-    val healthAdj: Int
-    val healthDesc: String
-    if (sleepHours != null && sleepScore != null) {
-        val sleepHoursAdj = when {
-            sleepHours < 8f -> maxOf(-25f, (sleepHours - 8f) * 6.25f)
-            sleepHours > 10f -> -5f
-            else -> 0f
+    // HEALTH: sleep and RHR factors from readiness compute breakdown.
+    val sleepHoursAdj = breakdown["sleep_hours"] ?: 0f
+    val sleepScoreAdj = breakdown["sleep_score"] ?: 0f
+    val rhrAdj = breakdown["rhr"] ?: 0f
+    val healthAdj = (sleepHoursAdj + sleepScoreAdj + rhrAdj).toInt()
+    val healthDesc = when {
+        breakdown.containsKey("sleep_hours") || breakdown.containsKey("sleep_score") || breakdown.containsKey("rhr") -> {
+            "Sleep + sleep quality + RHR baseline impact"
         }
-        val sleepScoreAdj = ((sleepScore - 70) * 0.15f).coerceIn(-15f, 15f)
-        healthAdj = (sleepHoursAdj + sleepScoreAdj).toInt()
-        healthDesc = "%.1fh sleep, quality %d/100".format(sleepHours, sleepScore)
-    } else {
-        healthAdj = 0
-        healthDesc = "Complete your morning check-in"
+        else -> "Complete your morning check-in"
     }
 
-    // LOAD: from cloud breakdown or pending
-    val loadAdj: Int
-    val loadDesc: String
-    val cloudLoad = state.readinessBreakdown["session_load"]
-    if (cloudLoad != null) {
-        loadAdj = cloudLoad.toInt()
-        loadDesc = state.planningAccuracyLine ?: "Yesterday's session impact"
-    } else {
-        loadAdj = 0
-        loadDesc = "No session data yet"
+    // LOAD: session load + gated drain/cooldown factors from readiness compute.
+    val loadSessionAdj = breakdown["session_load"] ?: 0f
+    val loadDrainAdj = breakdown["drain_score"] ?: 0f
+    val loadCooldownAdj = breakdown["cooldown_index"] ?: 0f
+    val loadAdj = (loadSessionAdj + loadDrainAdj + loadCooldownAdj).toInt()
+    val hasLoadFactors = breakdown.containsKey("session_load") ||
+            breakdown.containsKey("drain_score") ||
+            breakdown.containsKey("cooldown_index")
+    val loadDesc = when {
+        state.planningAccuracyLine != null -> state.planningAccuracyLine ?: ""
+        hasLoadFactors -> "Session load + drain score + cooldown behavior impact"
+        else -> "No session load data yet"
     }
 
-    // RECOVERY: pending recovery action
-    val recoveryDesc: String
-    val recoveryLabel: String
-    if (pendingRecovery != null) {
-        recoveryLabel = "${pendingRecovery.emoji} +${pendingRecovery.boostPoints}"
-        recoveryDesc = "${pendingRecovery.type} — confirm on home screen"
-    } else {
-        recoveryLabel = "—"
-        recoveryDesc = "Pick a recovery action after your next session"
+    // RECOVERY: suggestion-only guidance (not a score factor category).
+    val recoveryLabel = "TIP"
+    val recoveryDesc = when {
+        !state.readinessMessage.isNullOrBlank() -> state.readinessMessage ?: ""
+        pendingRecovery != null -> "${pendingRecovery.type} available — confirm on home screen"
+        else -> "Follow the readiness guidance and add recovery after demanding sessions"
     }
+
+    data class SubFactor(
+        val label: String,
+        val points: Int,
+    )
 
     data class Category(
         val emoji: String,
@@ -106,11 +109,36 @@ fun BudgetDetailScreen(
         val valueLabel: String,
         val points: Int,
         val description: String,
+        val subFactors: List<SubFactor> = emptyList(),
     )
 
+    val healthSubFactors = buildList {
+        if (breakdown.containsKey("sleep_hours")) {
+            add(SubFactor("Sleep hours", sleepHoursAdj.toInt()))
+        }
+        if (breakdown.containsKey("sleep_score")) {
+            add(SubFactor("Sleep quality", sleepScoreAdj.toInt()))
+        }
+        if (breakdown.containsKey("rhr")) {
+            add(SubFactor("Resting HR", rhrAdj.toInt()))
+        }
+    }
+
+    val loadSubFactors = buildList {
+        if (breakdown.containsKey("session_load")) {
+            add(SubFactor("Session load", loadSessionAdj.toInt()))
+        }
+        if (breakdown.containsKey("drain_score")) {
+            add(SubFactor("Drain score", loadDrainAdj.toInt()))
+        }
+        if (breakdown.containsKey("cooldown_index")) {
+            add(SubFactor("Cooldown", loadCooldownAdj.toInt()))
+        }
+    }
+
     val categories = listOf(
-        Category("🌙", "Health", if (healthAdj >= 0) "+$healthAdj" else "$healthAdj", healthAdj, healthDesc),
-        Category("⚡", "Load", if (loadAdj >= 0) "+$loadAdj" else "$loadAdj", loadAdj, loadDesc),
+        Category("🌙", "Health", if (healthAdj >= 0) "+$healthAdj" else "$healthAdj", healthAdj, healthDesc, healthSubFactors),
+        Category("⚡", "Load", if (loadAdj >= 0) "+$loadAdj" else "$loadAdj", loadAdj, loadDesc, loadSubFactors),
         Category("💚", "Recovery", recoveryLabel, 0, recoveryDesc),
     )
 
@@ -197,11 +225,38 @@ fun BudgetDetailScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(cat.title, style = MaterialTheme.typography.titleMedium)
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                cat.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (cat.subFactors.isNotEmpty()) {
+                                cat.subFactors.forEach { sf ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Text(
+                                            sf.label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        val sfColor = when {
+                                            sf.points > 0 -> BudgetGreen
+                                            sf.points < 0 -> BudgetRed
+                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                        Text(
+                                            if (sf.points >= 0) "+${sf.points}" else "${sf.points}",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = sfColor,
+                                        )
+                                    }
+                                }
+                            } else {
+                                Text(
+                                    cat.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         val color = when {
                             cat.points > 0 -> BudgetGreen

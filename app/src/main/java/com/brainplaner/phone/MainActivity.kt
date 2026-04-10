@@ -141,6 +141,8 @@ class MainActivity : ComponentActivity() {
                     getActiveSessionId = { activeSessionId },
                     onStartSession = { minutes -> startSession(minutes) },
                     onStopSession = { stopSession() },
+                    onPauseSession = { pauseSession() },
+                    onResumeSession = { resumeSession() },
                     onLogout = {
                         PhoneAwarenessService.stop(this)
                         UserAuth.clearUserId(this)
@@ -294,6 +296,96 @@ class MainActivity : ComponentActivity() {
         }
 
         Result.success("✓ Session stopped\n${stoppedId.take(8)}...")
+    }
+
+    // LOCAL-FIRST pause: saves locally immediately, syncs to cloud in background.
+    private suspend fun pauseSession(): Result<String> = withContext(Dispatchers.IO) {
+        val id = activeSessionId
+            ?: return@withContext Result.failure(Exception("No active session"))
+
+        val userId = UserAuth.getUserId(this@MainActivity)
+            ?: return@withContext Result.failure(Exception("No user logged in"))
+
+        // 1. Save pause state locally immediately.
+        LocalStore.saveSessionPaused(this@MainActivity)
+        android.util.Log.i("MainActivity", "Local session paused: $id")
+
+        // 2. Notify PhoneAwarenessService immediately via broadcast.
+        sendBroadcast(Intent("com.brainplaner.phone.SESSION_PAUSED").apply {
+            setPackage(packageName)
+            putExtra("session_id", id)
+        })
+
+        // 3. Fire-and-forget cloud sync.
+        if (!id.startsWith("local-")) {
+            try {
+                val body = "{}".toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("$CLOUD_API_URL/sessions/$id/pause")
+                    .post(body)
+                    .addHeader("Authorization", "Bearer $USER_TOKEN")
+                    .addHeader("X-User-ID", userId)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+                val response = runCatching { client.newCall(request).execute() }.getOrNull()
+                response?.use { res ->
+                    if (res.isSuccessful) {
+                        android.util.Log.i("MainActivity", "Cloud session pause synced for $id")
+                    } else {
+                        android.util.Log.w("MainActivity", "Cloud session pause failed HTTP ${res.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("MainActivity", "Cloud sync failed for session pause", e)
+            }
+        }
+
+        Result.success("⏸ Session paused")
+    }
+
+    // LOCAL-FIRST resume: saves locally immediately, syncs to cloud in background.
+    private suspend fun resumeSession(): Result<String> = withContext(Dispatchers.IO) {
+        val id = activeSessionId
+            ?: return@withContext Result.failure(Exception("No active session"))
+
+        val userId = UserAuth.getUserId(this@MainActivity)
+            ?: return@withContext Result.failure(Exception("No user logged in"))
+
+        // 1. Save resume state locally immediately.
+        LocalStore.saveSessionResumed(this@MainActivity)
+        android.util.Log.i("MainActivity", "Local session resumed: $id")
+
+        // 2. Notify PhoneAwarenessService immediately via broadcast.
+        sendBroadcast(Intent("com.brainplaner.phone.SESSION_RESUMED").apply {
+            setPackage(packageName)
+            putExtra("session_id", id)
+        })
+
+        // 3. Fire-and-forget cloud sync.
+        if (!id.startsWith("local-")) {
+            try {
+                val body = "{}".toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("$CLOUD_API_URL/sessions/$id/resume")
+                    .post(body)
+                    .addHeader("Authorization", "Bearer $USER_TOKEN")
+                    .addHeader("X-User-ID", userId)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+                val response = runCatching { client.newCall(request).execute() }.getOrNull()
+                response?.use { res ->
+                    if (res.isSuccessful) {
+                        android.util.Log.i("MainActivity", "Cloud session resume synced for $id")
+                    } else {
+                        android.util.Log.w("MainActivity", "Cloud session resume failed HTTP ${res.code}")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("MainActivity", "Cloud sync failed for session resume", e)
+            }
+        }
+
+        Result.success("▶ Session resumed")
     }
 
     override fun onDestroy() {

@@ -25,6 +25,7 @@ data class HomeUiState(
     val handoffNextAction: String? = null,
     val readinessScore: String? = null,
     val readinessBreakdown: Map<String, Float> = emptyMap(),
+    val readinessMessage: String? = null,
     val planningAccuracyLine: String? = null,
     val hasCheckedInToday: Boolean = false,
     val isCheckInSubmitting: Boolean = false,
@@ -129,6 +130,7 @@ class HomeViewModel(
         _state.value = current.copy(
             readinessScore = readinessData.score ?: current.readinessScore,
             readinessBreakdown = if (readinessData.breakdown.isNotEmpty()) readinessData.breakdown else current.readinessBreakdown,
+            readinessMessage = readinessData.message ?: current.readinessMessage,
             hasCheckedInToday = readinessData.hasCheckinToday || current.hasCheckedInToday,
             planningAccuracyLine = readinessData.planningLine ?: current.planningAccuracyLine,
             sessionSummary = brief.sessionSummary ?: current.sessionSummary,
@@ -203,6 +205,59 @@ class HomeViewModel(
         }
     }
 
+    /** Confirm a recovery action in cloud so it affects the server readiness score. */
+    fun confirmRecoveryAction(
+        type: String,
+        emoji: String,
+        boostPoints: Int,
+        selectedAtMs: Long,
+        onResult: (Boolean) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val previousScore = _state.value.readinessScore
+            val ok = withContext(Dispatchers.IO) {
+                postRecoveryActionToCloud(type, emoji, boostPoints, selectedAtMs)
+            }
+            if (ok) {
+                // Pull updated readiness with short retries to absorb eventual consistency.
+                for (attempt in 0 until 3) {
+                    tryEnrichFromCloud()
+                    val nextScore = _state.value.readinessScore
+                    if (nextScore != null && nextScore != previousScore) {
+                        break
+                    }
+                    if (attempt < 2) delay(900L)
+                }
+            }
+            onResult(ok)
+        }
+    }
+
+    private suspend fun postRecoveryActionToCloud(
+        type: String,
+        emoji: String,
+        boostPoints: Int,
+        selectedAtMs: Long,
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val escapedType = type.replace("\\", "\\\\").replace("\"", "\\\"")
+            val escapedEmoji = emoji.replace("\\", "\\\\").replace("\"", "\\\"")
+            val json =
+                """{"action_type":"$escapedType","boost_points":$boostPoints,"emoji":"$escapedEmoji","selected_at_ms":$selectedAtMs}"""
+            val body = json.toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("$apiUrl/readiness/recovery-action")
+                .post(body)
+                .addHeader("Authorization", "Bearer $userToken")
+                .addHeader("X-User-ID", userId)
+                .addHeader("Content-Type", "application/json")
+                .build()
+            client.newCall(request).execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private data class BriefFetchResult(
         val sessionSummary: String? = null,
         val handoffNextAction: String? = null,
@@ -241,6 +296,7 @@ class HomeViewModel(
     private data class ReadinessFetchResult(
         val score: String? = null,
         val breakdown: Map<String, Float> = emptyMap(),
+        val message: String? = null,
         val hasCheckinToday: Boolean = false,
         val planningLine: String? = null,
         val success: Boolean = false,
@@ -260,6 +316,7 @@ class HomeViewModel(
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext ReadinessFetchResult()
                     val score = Regex(""""score"\s*:\s*(\d+)""").find(body)?.groupValues?.get(1)
+                    val message = extractString(body, "message")
                     val hasCheckin = Regex(""""has_checkin_today"\s*:\s*(true|false)""")
                         .find(body)?.groupValues?.get(1) == "true"
                     val line = buildPlanningAccuracyLine(body)
@@ -267,6 +324,7 @@ class HomeViewModel(
                     return@withContext ReadinessFetchResult(
                         score = score,
                         breakdown = breakdown,
+                        message = message,
                         hasCheckinToday = hasCheckin,
                         planningLine = line,
                         success = true,
@@ -308,7 +366,15 @@ class HomeViewModel(
     }
 
     private fun parseReadinessBreakdown(json: String): Map<String, Float> {
-        val keys = listOf("sleep_hours", "sleep_score", "rhr", "session_load", "drain_score", "cooldown_index")
+        val keys = listOf(
+            "sleep_hours",
+            "sleep_score",
+            "rhr",
+            "session_load",
+            "drain_score",
+            "cooldown_index",
+            "recovery_action",
+        )
         return buildMap {
             keys.forEach { key ->
                 val match = Regex("\"$key\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)")
@@ -319,14 +385,6 @@ class HomeViewModel(
                 if (match != null) put(key, match)
             }
         }
-    }
-
-    /** Apply a recovery boost to the current readiness score. */
-    fun applyRecoveryBoost(boostPoints: Int) {
-        val current = _state.value
-        val currentScore = current.readinessScore?.toIntOrNull() ?: 50
-        val newScore = (currentScore + boostPoints).coerceAtMost(100)
-        _state.value = current.copy(readinessScore = newScore.toString())
     }
 
     companion object {

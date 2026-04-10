@@ -16,6 +16,10 @@ import java.util.UUID
  */
 object LocalStore {
     private const val PREFS = "brainplaner_local"
+    const val REFLECTION_STAGE_FORM = "form"
+    const val REFLECTION_STAGE_SESSION_TRUTH = "session_truth"
+    const val REFLECTION_STAGE_RECOVERY = "recovery"
+    const val REFLECTION_STAGE_COOLDOWN = "cooldown"
 
     private fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -92,6 +96,9 @@ object LocalStore {
             startMs = p.getLong("session_start_ms", 0L),
             plannedMinutes = p.getInt("session_planned_min", 45),
             cloudSynced = p.getBoolean("session_cloud_synced", false),
+            isPaused = p.getBoolean("session_paused", false),
+            totalPauseMs = p.getLong("session_total_pause_ms", 0L),
+            pauseStartMs = p.getLong("session_pause_start_ms", 0L),
         )
     }
 
@@ -117,6 +124,28 @@ object LocalStore {
             .remove("session_start_ms")
             .remove("session_planned_min")
             .remove("session_cloud_synced")
+            .remove("session_paused")
+            .remove("session_total_pause_ms")
+            .remove("session_pause_start_ms")
+            .apply()
+    }
+
+    fun saveSessionPaused(ctx: Context) {
+        prefs(ctx).edit()
+            .putBoolean("session_paused", true)
+            .putLong("session_pause_start_ms", System.currentTimeMillis())
+            .apply()
+    }
+
+    fun saveSessionResumed(ctx: Context) {
+        val p = prefs(ctx)
+        val pauseStartMs = p.getLong("session_pause_start_ms", 0L)
+        val previousTotal = p.getLong("session_total_pause_ms", 0L)
+        val thisPauseMs = if (pauseStartMs > 0L) System.currentTimeMillis() - pauseStartMs else 0L
+        p.edit()
+            .putBoolean("session_paused", false)
+            .putLong("session_total_pause_ms", previousTotal + thisPauseMs)
+            .putLong("session_pause_start_ms", 0L)
             .apply()
     }
 
@@ -144,6 +173,7 @@ object LocalStore {
         sessionId: String,
         focusScore: Int,
         drainScore: Int,
+        alignmentScore: Int,
         handoffNextAction: String,
         note: String?,
     ) {
@@ -151,6 +181,7 @@ object LocalStore {
             .putString("pending_refl_session_id", sessionId)
             .putInt("pending_refl_focus", focusScore)
             .putInt("pending_refl_drain", drainScore)
+            .putInt("pending_refl_alignment", alignmentScore)
             .putString("pending_refl_next_action", handoffNextAction)
             .putString("pending_refl_note", note)
             .putBoolean("pending_refl_exists", true)
@@ -167,6 +198,7 @@ object LocalStore {
         val sessionId: String,
         val focusScore: Int,
         val drainScore: Int,
+        val alignmentScore: Int,
         val handoffNextAction: String,
         val note: String?,
     )
@@ -178,6 +210,7 @@ object LocalStore {
             sessionId = p.getString("pending_refl_session_id", "") ?: "",
             focusScore = p.getInt("pending_refl_focus", 0),
             drainScore = p.getInt("pending_refl_drain", 0),
+            alignmentScore = p.getInt("pending_refl_alignment", -1),
             handoffNextAction = p.getString("pending_refl_next_action", "") ?: "",
             note = p.getString("pending_refl_note", null),
         )
@@ -188,10 +221,46 @@ object LocalStore {
             .remove("pending_refl_session_id")
             .remove("pending_refl_focus")
             .remove("pending_refl_drain")
+
             .remove("pending_refl_next_action")
             .remove("pending_refl_note")
             .putBoolean("pending_refl_exists", false)
             .apply()
+    }
+
+    // ── Reflection resume routing ──────────────────────────────
+
+    fun savePendingReflectionRoute(ctx: Context, sessionId: String) {
+        if (sessionId.isBlank()) return
+        prefs(ctx).edit()
+            .putString("pending_refl_route_session_id", sessionId)
+            .putBoolean("pending_refl_route_exists", true)
+            .apply()
+    }
+
+    fun getPendingReflectionRouteSessionId(ctx: Context): String? {
+        val p = prefs(ctx)
+        if (!p.getBoolean("pending_refl_route_exists", false)) return null
+        return p.getString("pending_refl_route_session_id", null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun clearPendingReflectionRoute(ctx: Context) {
+        prefs(ctx).edit()
+            .remove("pending_refl_route_session_id")
+            .remove("pending_refl_route_stage")
+            .putBoolean("pending_refl_route_exists", false)
+            .apply()
+    }
+
+    fun savePendingReflectionStage(ctx: Context, stage: String) {
+        prefs(ctx).edit()
+            .putString("pending_refl_route_stage", stage)
+            .apply()
+    }
+
+    fun getPendingReflectionStage(ctx: Context): String {
+        return prefs(ctx).getString("pending_refl_route_stage", REFLECTION_STAGE_FORM)
+            ?: REFLECTION_STAGE_FORM
     }
 
     // ── Cognitive warm-up ────────────────────────────────────────
@@ -290,5 +359,8 @@ object LocalStore {
         val startMs: Long,
         val plannedMinutes: Int,
         val cloudSynced: Boolean,
+        val isPaused: Boolean = false,
+        val totalPauseMs: Long = 0L,
+        val pauseStartMs: Long = 0L,
     )
 }
