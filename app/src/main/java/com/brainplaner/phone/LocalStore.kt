@@ -16,10 +16,14 @@ import java.util.UUID
  */
 object LocalStore {
     private const val PREFS = "brainplaner_local"
+    private const val KEY_READINESS_TUNING_PROFILE = "readiness_tuning_profile"
     const val REFLECTION_STAGE_FORM = "form"
     const val REFLECTION_STAGE_SESSION_TRUTH = "session_truth"
     const val REFLECTION_STAGE_RECOVERY = "recovery"
     const val REFLECTION_STAGE_COOLDOWN = "cooldown"
+    const val READINESS_PROFILE_DEFAULT = "default"
+    const val READINESS_PROFILE_CONSERVATIVE = "conservative"
+    const val READINESS_PROFILE_AGGRESSIVE = "aggressive"
 
     private fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -270,6 +274,29 @@ object LocalStore {
 
     fun setWarmupEnabled(ctx: Context, enabled: Boolean) {
         prefs(ctx).edit().putBoolean("warmup_enabled", enabled).apply()
+    }
+
+    // ── Readiness tuning profile ───────────────────────────────
+
+    fun getReadinessTuningProfile(ctx: Context): String {
+        val value = prefs(ctx).getString(KEY_READINESS_TUNING_PROFILE, READINESS_PROFILE_DEFAULT)
+            ?: READINESS_PROFILE_DEFAULT
+        return when (value) {
+            READINESS_PROFILE_CONSERVATIVE,
+            READINESS_PROFILE_AGGRESSIVE,
+            READINESS_PROFILE_DEFAULT,
+            -> value
+            else -> READINESS_PROFILE_DEFAULT
+        }
+    }
+
+    fun setReadinessTuningProfile(ctx: Context, profile: String) {
+        val normalized = when (profile.lowercase(Locale.US)) {
+            READINESS_PROFILE_CONSERVATIVE -> READINESS_PROFILE_CONSERVATIVE
+            READINESS_PROFILE_AGGRESSIVE -> READINESS_PROFILE_AGGRESSIVE
+            else -> READINESS_PROFILE_DEFAULT
+        }
+        prefs(ctx).edit().putString(KEY_READINESS_TUNING_PROFILE, normalized).apply()
     }
 
     fun saveWarmupResult(ctx: Context, medianMs: Int) {

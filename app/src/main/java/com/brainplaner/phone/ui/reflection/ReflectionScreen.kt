@@ -10,14 +10,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -38,6 +35,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brainplaner.phone.LocalStore
+import com.brainplaner.phone.ui.components.BrainCard
+import com.brainplaner.phone.ui.components.BrainChoiceChip
+import com.brainplaner.phone.ui.components.BrainPrimaryButton
+import com.brainplaner.phone.ui.theme.BrainplanerTheme
 import com.brainplaner.phone.ui.theme.BudgetGreen
 import com.brainplaner.phone.ui.theme.BudgetRed
 import com.brainplaner.phone.ui.theme.BudgetYellow
@@ -95,12 +96,13 @@ fun ReflectionScreen(
     )
 
     val canSubmit = focusScore > 0 && drainScore > 0 && handoffNextAction.isNotBlank()
+    val spacing = BrainplanerTheme.spacing
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(spacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -109,26 +111,23 @@ fun ReflectionScreen(
             color = MaterialTheme.colorScheme.primary,
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         // Primary validator: Focus (1–5)
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     "HOW FOCUSED WERE YOU?",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     letterSpacing = 2.sp,
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(spacing.xxs))
                 focusAnchors.forEach { item ->
-                    FilterChip(
+                    BrainChoiceChip(
                         selected = focusScore == item.score,
                         onClick = { focusScore = item.score },
                         label = {
@@ -147,26 +146,23 @@ fun ReflectionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.md))
 
         // Secondary validator: Mental drain (1–5)
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     "HOW MENTALLY DRAINED DO YOU FEEL?",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     letterSpacing = 2.sp,
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(spacing.xxs))
                 drainAnchors.forEach { item ->
-                    FilterChip(
+                    BrainChoiceChip(
                         selected = drainScore == item.score,
                         onClick = { drainScore = item.score },
                         label = {
@@ -185,17 +181,14 @@ fun ReflectionScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.md))
 
         // Next step + note card
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                 Text(
                     "HANDOFF",
                     style = MaterialTheme.typography.labelMedium,
@@ -205,8 +198,8 @@ fun ReflectionScreen(
                 OutlinedTextField(
                     value = handoffNextAction,
                     onValueChange = { handoffNextAction = it.take(200) },
-                    label = { Text("First action next time *") },
-                    placeholder = { Text("e.g. Open file X and write the intro paragraph") },
+                    label = { Text("First action in your next cognitive session *") },
+                    placeholder = { Text("e.g. Start next cognitive session by opening file X and writing the intro paragraph") },
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 3,
                     supportingText = { Text("${handoffNextAction.length}/200") },
@@ -224,7 +217,7 @@ fun ReflectionScreen(
         }
 
         if (state.error != null) {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(spacing.xs))
             Text(
                 text = "Error: ${state.error}",
                 color = MaterialTheme.colorScheme.error,
@@ -232,9 +225,9 @@ fun ReflectionScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
-        Button(
+        BrainPrimaryButton(
             onClick = {
                 viewModel.submit(
                     focusScore = focusScore,
@@ -249,10 +242,6 @@ fun ReflectionScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-            ),
         ) {
             if (state.isSubmitting) {
                 CircularProgressIndicator(
@@ -269,7 +258,7 @@ fun ReflectionScreen(
             Text("Skip for now", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(spacing.xxl))
     }
 }
 
@@ -282,6 +271,7 @@ private fun SessionTruthScreen(
     onContinue: () -> Unit,
 ) {
     val pct = (truth.completionRatio * 100).toInt()
+    val spacing = BrainplanerTheme.spacing
     val accuracyColor = when {
         pct in 80..120 -> BudgetGreen
         pct in 60..79 || pct in 121..140 -> BudgetYellow
@@ -292,7 +282,7 @@ private fun SessionTruthScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(spacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -307,17 +297,14 @@ private fun SessionTruthScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         // Duration card
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                 Text(
                     "PLAN VS EXECUTION",
                     style = MaterialTheme.typography.labelMedium,
@@ -349,18 +336,15 @@ private fun SessionTruthScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(spacing.sm))
 
         // Phone behavior card
         if (truth.phoneUnlocks != null) {
-            Card(
+            BrainCard(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
+                containerColor = BrainplanerTheme.surfaceRoles.surface2,
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(spacing.md), verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                     Text(
                         "PHONE BEHAVIOR",
                         style = MaterialTheme.typography.labelMedium,
@@ -377,19 +361,16 @@ private fun SessionTruthScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(spacing.sm))
         }
 
         // Coaching interpretation card
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(spacing.md),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("💡", style = MaterialTheme.typography.displaySmall)
@@ -403,22 +384,17 @@ private fun SessionTruthScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(spacing.xl))
 
-        Button(
+        BrainPrimaryButton(
+            text = "Continue",
             onClick = onContinue,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-            ),
-        ) {
-            Text("Continue", style = MaterialTheme.typography.titleLarge)
-        }
+        )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(spacing.xxl))
     }
 }
 
@@ -481,12 +457,13 @@ private fun RecoverySuggestionsScreen(
     val context = LocalContext.current
     val actions = buildRecoveryActions(drainScore)
     var selectedIndex by remember { mutableIntStateOf(-1) }
+    val spacing = BrainplanerTheme.spacing
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(spacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -501,26 +478,17 @@ private fun RecoverySuggestionsScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         actions.forEachIndexed { index, action ->
             val isSelected = selectedIndex == index
-            Card(
+            BrainCard(
                 onClick = { selectedIndex = if (isSelected) -1 else index },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isSelected)
-                        BudgetGreen.copy(alpha = 0.15f)
-                    else
-                        MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                border = if (isSelected)
-                    androidx.compose.foundation.BorderStroke(2.dp, BudgetGreen)
-                else null,
+                containerColor = if (isSelected) BudgetGreen.copy(alpha = 0.15f) else BrainplanerTheme.surfaceRoles.surface2,
             ) {
                 Row(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(spacing.md),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -557,20 +525,27 @@ private fun RecoverySuggestionsScreen(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            if (isSelected) {
+                Text(
+                    "Selected",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = spacing.xxs, start = spacing.sm),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = BudgetGreen,
+                )
+            }
+            Spacer(modifier = Modifier.height(spacing.sm))
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(spacing.xs))
 
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(spacing.md),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -591,9 +566,9 @@ private fun RecoverySuggestionsScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(spacing.xl))
 
-        Button(
+        BrainPrimaryButton(
             onClick = {
                 if (selectedIndex >= 0) {
                     val picked = actions[selectedIndex]
@@ -606,22 +581,19 @@ private fun RecoverySuggestionsScreen(
                 }
                 onDone()
             },
+            containerColor = if (selectedIndex >= 0) BudgetGreen else MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (selectedIndex >= 0) BudgetGreen else MaterialTheme.colorScheme.primary,
-            ),
         ) {
             Text(
                 if (selectedIndex >= 0) "Start ${actions[selectedIndex].title} — Back to Home"
                 else "Skip — Back to Home",
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
             )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(spacing.xxl))
     }
 }
 
@@ -629,11 +601,12 @@ private fun RecoverySuggestionsScreen(
 
 @Composable
 private fun CooldownReminderScreen(onDone: () -> Unit) {
+    val spacing = BrainplanerTheme.spacing
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(spacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -642,7 +615,7 @@ private fun CooldownReminderScreen(onDone: () -> Unit) {
             style = MaterialTheme.typography.displayLarge,
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         Text(
             "Let your brain finish the job",
@@ -651,17 +624,14 @@ private fun CooldownReminderScreen(onDone: () -> Unit) {
             textAlign = TextAlign.Center,
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.md))
 
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(spacing.lg),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
@@ -681,17 +651,14 @@ private fun CooldownReminderScreen(onDone: () -> Unit) {
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.md))
 
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Row(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -713,25 +680,17 @@ private fun CooldownReminderScreen(onDone: () -> Unit) {
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(spacing.xxl))
 
-        Button(
+        BrainPrimaryButton(
+            text = "Put phone down — Back to Home",
             onClick = onDone,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-            ),
-        ) {
-            Text(
-                "Put phone down — Back to Home",
-                style = MaterialTheme.typography.titleLarge,
-            )
-        }
+        )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(spacing.xxl))
     }
 }
 

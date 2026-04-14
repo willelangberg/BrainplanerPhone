@@ -96,7 +96,7 @@ fun DailyCheckInScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Sleep score", style = MaterialTheme.typography.bodySmall)
+            Text("Sleep quality score", style = MaterialTheme.typography.bodySmall)
             Text(
                 "$sleepScore",
                 style = MaterialTheme.typography.bodySmall,
@@ -109,6 +109,11 @@ fun DailyCheckInScreen(
             valueRange = 0f..100f,
             steps = 99,
             modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            "Use your wearable score, or your own 0-100 rating if you do not track sleep.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         OutlinedTextField(

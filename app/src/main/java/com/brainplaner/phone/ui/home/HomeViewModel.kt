@@ -33,6 +33,11 @@ data class HomeUiState(
     val isOffline: Boolean = false,
     val lastCloudSyncAtMs: Long? = null,
     val cloudErrorReason: String? = null,
+    // Coaching loop
+    val insightEvidence: String? = null,
+    val insightPrompt: String? = null,
+    val insightType: String? = null,
+    val insightSuggestedMinutes: Int? = null,
 )
 
 class HomeViewModel(
@@ -116,9 +121,10 @@ class HomeViewModel(
     private suspend fun tryEnrichFromCloud() {
         val brief = withContext(Dispatchers.IO) { fetchBrief() }
         val readinessData = withContext(Dispatchers.IO) { fetchReadinessData() }
+        val coaching = withContext(Dispatchers.IO) { fetchCoachingNudge() }
 
         val current = _state.value
-        val anyCloudSuccess = brief.success || readinessData.success
+        val anyCloudSuccess = brief.success || readinessData.success || coaching.success
         val nowOffline = !anyCloudSuccess && current.readinessScore != null
         val nextLastSync = if (anyCloudSuccess) System.currentTimeMillis() else current.lastCloudSyncAtMs
         val nextErrorReason = if (anyCloudSuccess) {
@@ -135,6 +141,10 @@ class HomeViewModel(
             planningAccuracyLine = readinessData.planningLine ?: current.planningAccuracyLine,
             sessionSummary = brief.sessionSummary ?: current.sessionSummary,
             handoffNextAction = brief.handoffNextAction ?: current.handoffNextAction,
+            insightEvidence = coaching.evidence ?: current.insightEvidence,
+            insightPrompt = coaching.prompt ?: current.insightPrompt,
+            insightType = coaching.insightType ?: current.insightType,
+            insightSuggestedMinutes = coaching.suggestedMinutes ?: current.insightSuggestedMinutes,
             isOffline = nowOffline,
             lastCloudSyncAtMs = nextLastSync,
             cloudErrorReason = nextErrorReason,
@@ -293,6 +303,55 @@ class HomeViewModel(
     private fun extractString(json: String, key: String): String? =
         Regex(""""$key"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
 
+    private data class CoachingFetchResult(
+        val evidence: String? = null,
+        val prompt: String? = null,
+        val insightType: String? = null,
+        val suggestedMinutes: Int? = null,
+        val success: Boolean = false,
+    )
+
+    private suspend fun fetchCoachingNudge(): CoachingFetchResult = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$apiUrl/coaching/nudge")
+                .get()
+                .addHeader("Authorization", "Bearer $userToken")
+                .addHeader("X-User-ID", userId)
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    val hasNudge = Regex(""""has_nudge"\s*:\s*(true|false)""")
+                        .find(body)?.groupValues?.get(1) == "true"
+                    if (!hasNudge) return@withContext CoachingFetchResult(success = true)
+
+                    val evidence = extractString(body, "primary_evidence")
+                        ?: extractString(body, "primary_nudge")
+                    val prompt = extractString(body, "primary_prompt")
+                    val nudgeType = extractString(body, "primary_type")
+                    val sugMin = Regex(""""suggested_minutes"\s*:\s*(\d+)""")
+                        .find(body)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.toIntOrNull()
+
+                    CoachingFetchResult(
+                        evidence = evidence,
+                        prompt = prompt,
+                        insightType = nudgeType,
+                        suggestedMinutes = sugMin,
+                        success = true,
+                    )
+                } else {
+                    CoachingFetchResult()
+                }
+            }
+        } catch (_: Exception) {
+            CoachingFetchResult()
+        }
+    }
+
     private data class ReadinessFetchResult(
         val score: String? = null,
         val breakdown: Map<String, Float> = emptyMap(),
@@ -306,8 +365,9 @@ class HomeViewModel(
     /** Best-effort cloud readiness fetch; never throws. */
     private suspend fun fetchReadinessData(): ReadinessFetchResult = withContext(Dispatchers.IO) {
         try {
+            val selectedProfile = LocalStore.getReadinessTuningProfile(ctx)
             val request = Request.Builder()
-                .url("$apiUrl/readiness")
+                .url("$apiUrl/readiness?profile=$selectedProfile")
                 .get()
                 .addHeader("Authorization", "Bearer $userToken")
                 .addHeader("X-User-ID", userId)
@@ -373,6 +433,7 @@ class HomeViewModel(
             "session_load",
             "drain_score",
             "cooldown_index",
+            "recovery_actions",
             "recovery_action",
         )
         return buildMap {

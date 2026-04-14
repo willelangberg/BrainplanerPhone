@@ -19,11 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,10 +43,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brainplaner.phone.LocalStore
+import com.brainplaner.phone.ui.components.BrainCard
+import com.brainplaner.phone.ui.components.BrainChoiceChip
+import com.brainplaner.phone.ui.components.BrainDangerButton
+import com.brainplaner.phone.ui.components.BrainPrimaryButton
 import com.brainplaner.phone.ui.theme.BrainTeal
+import com.brainplaner.phone.ui.theme.BrainplanerPhoneTheme
+import com.brainplaner.phone.ui.theme.BrainplanerTheme
 import com.brainplaner.phone.ui.theme.BudgetGreen
 import com.brainplaner.phone.ui.theme.BudgetRed
 import com.brainplaner.phone.ui.theme.BudgetYellow
@@ -84,6 +89,9 @@ fun HomeScreen(
     var pauseStartMs by remember { mutableLongStateOf(0L) }
 
     val context = LocalContext.current
+    var pendingRecovery by remember { mutableStateOf(LocalStore.getPendingRecovery(context)) }
+    var isRecoveryConfirming by remember { mutableStateOf(false) }
+    val spacing = BrainplanerTheme.spacing
 
     LaunchedEffect(Unit) {
         val activeSession = LocalStore.getActiveSession(context) ?: return@LaunchedEffect
@@ -93,6 +101,12 @@ fun HomeScreen(
         totalPauseMs = activeSession.totalPauseMs
         pauseStartMs = activeSession.pauseStartMs
         isSessionActive = true
+    }
+
+    // Auto-select suggested duration when available
+    LaunchedEffect(state.insightSuggestedMinutes) {
+        val suggested = state.insightSuggestedMinutes ?: return@LaunchedEffect
+        if (!isSessionActive) plannedMinutes = suggested
     }
 
     val startSessionAction: () -> Unit = {
@@ -147,7 +161,7 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(spacing.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // ── App header ──
@@ -192,19 +206,16 @@ fun HomeScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         // ── Brain Budget gauge card ──
-        Card(
-            onClick = onBudgetDetail,
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
+            onClick = onBudgetDetail,
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(spacing.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -213,7 +224,7 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     letterSpacing = 2.sp,
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(spacing.md))
 
                 if (state.isLoading) {
                     CircularProgressIndicator(
@@ -234,17 +245,124 @@ fun HomeScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(spacing.md))
+
+        // ── Self-insight card ──
+        val hasInsight = state.insightEvidence != null
+
+        if (hasInsight && !isSessionActive) {
+            BrainCard(
+                modifier = Modifier.fillMaxWidth(),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Column(modifier = Modifier.padding(spacing.md)) {
+                    Text(
+                        "NOTICE",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        letterSpacing = 2.sp,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    state.insightEvidence?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                    state.insightPrompt?.let {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(spacing.md))
+        }
+
+        // ── Recovery boost confirmation card ──
+        pendingRecovery?.let { recovery ->
+            BrainCard(
+                modifier = Modifier.fillMaxWidth(),
+                containerColor = BudgetGreen.copy(alpha = 0.15f),
+            ) {
+                Column(modifier = Modifier.padding(spacing.md)) {
+                    Text(
+                        "RECOVERY BOOST",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BudgetGreen,
+                        letterSpacing = 2.sp,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "${recovery.emoji} ${recovery.type} — +${recovery.boostPoints} pts",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Tap 'Confirm' to apply this recovery boost to your Brain Budget.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                if (isRecoveryConfirming) return@Button
+                                isRecoveryConfirming = true
+                                viewModel.confirmRecoveryAction(
+                                    type = recovery.type,
+                                    emoji = recovery.emoji,
+                                    boostPoints = recovery.boostPoints,
+                                    selectedAtMs = recovery.selectedAt,
+                                ) { ok ->
+                                    LocalStore.clearPendingRecovery(context)
+                                    pendingRecovery = null
+                                    isRecoveryConfirming = false
+                                    if (ok) actionMessage = "✅ Recovery boost applied!"
+                                    else actionMessage = "⚠️ Could not sync — boost cleared locally"
+                                }
+                            },
+                            enabled = !isRecoveryConfirming,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = BudgetGreen),
+                        ) {
+                            if (isRecoveryConfirming) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            } else {
+                                Text("Confirm")
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                LocalStore.clearPendingRecovery(context)
+                                pendingRecovery = null
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Dismiss")
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(spacing.md))
+        }
 
         // ── Continuity / handoff card ──
-        Card(
+        BrainCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(spacing.md)) {
                 Text(
                     "CONTINUITY",
                     style = MaterialTheme.typography.labelMedium,
@@ -277,7 +395,7 @@ fun HomeScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(spacing.lg))
 
         // ── Session controls ──
         if (!isSessionActive) {
@@ -292,11 +410,19 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                DURATION_OPTIONS.forEach { min ->
-                    FilterChip(
+                val suggested = state.insightSuggestedMinutes
+                val options = if (suggested != null && suggested !in DURATION_OPTIONS)
+                    (DURATION_OPTIONS + suggested).sorted()
+                else DURATION_OPTIONS
+
+                options.forEach { min ->
+                    val isSuggested = min == suggested
+                    BrainChoiceChip(
                         selected = plannedMinutes == min,
                         onClick = { plannedMinutes = min },
-                        label = { Text("${min}m") },
+                        label = {
+                            Text(if (isSuggested) "${min}m ★" else "${min}m")
+                        },
                     )
                 }
             }
@@ -334,15 +460,12 @@ fun HomeScreen(
             val progress = (elapsedSeconds.toFloat() / plannedSeconds.toFloat()).coerceIn(0f, 2f)
             val isOvertime = remaining < 0
 
-            Card(
+            BrainCard(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
+                containerColor = BrainplanerTheme.surfaceRoles.surface2,
             ) {
                 Column(
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier.padding(spacing.xl),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -600,5 +723,387 @@ private fun formatDuration(totalSeconds: Long): String {
         String.format("%d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format("%02d:%02d", minutes, seconds)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun HomePreviewContent(
+    state: HomeUiState,
+    plannedMinutes: Int = 45,
+    isSessionActive: Boolean = false,
+    activePlannedMinutes: Int = plannedMinutes,
+    elapsedSeconds: Long = 0L,
+    isPaused: Boolean = false,
+    actionMessage: String? = null,
+) {
+    val spacing = BrainplanerTheme.spacing
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(spacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "Brainplaner",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+
+        when {
+            state.isOffline -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            "📴 Offline mode",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        state.cloudErrorReason?.let { reason ->
+                            Text(
+                                reason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    TextButton(onClick = {}) {
+                        Text("Retry now")
+                    }
+                }
+            }
+
+            state.lastCloudSyncAtMs != null -> {
+                Text(
+                    "☁️ Synced recently",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(spacing.lg))
+
+        BrainCard(
+            modifier = Modifier.fillMaxWidth(),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
+        ) {
+            Column(
+                modifier = Modifier.padding(spacing.xl),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "BRAIN BUDGET",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 2.sp,
+                )
+                Spacer(modifier = Modifier.height(spacing.md))
+
+                if (state.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(40.dp),
+                        strokeWidth = 3.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    BrainBudgetGauge(
+                        score = state.readinessScore?.toIntOrNull() ?: 0,
+                        modifier = Modifier.size(160.dp),
+                    )
+                    Spacer(modifier = Modifier.height(spacing.xs))
+                    Text(
+                        "Tap for details",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(spacing.md))
+
+        if (!state.insightEvidence.isNullOrBlank() && !isSessionActive) {
+            BrainCard(
+                modifier = Modifier.fillMaxWidth(),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Column(modifier = Modifier.padding(spacing.md)) {
+                    Text(
+                        "NOTICE",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        letterSpacing = 2.sp,
+                    )
+                    Spacer(modifier = Modifier.height(spacing.xs))
+                    Text(
+                        state.insightEvidence,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                    state.insightPrompt?.let {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(spacing.md))
+        }
+
+        BrainCard(
+            modifier = Modifier.fillMaxWidth(),
+            containerColor = BrainplanerTheme.surfaceRoles.surface2,
+        ) {
+            Column(modifier = Modifier.padding(spacing.md)) {
+                Text(
+                    "CONTINUITY",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 2.sp,
+                )
+                Spacer(modifier = Modifier.height(spacing.xs))
+                when {
+                    state.isLoading -> CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    !state.sessionSummary.isNullOrBlank() || !state.handoffNextAction.isNullOrBlank() -> {
+                        state.sessionSummary?.let {
+                            Text(it, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        state.handoffNextAction?.let {
+                            Text(
+                                "▸ Next: $it",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    else -> {
+                        Text(
+                            "No previous session — start your first one!",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(spacing.lg))
+
+        if (!isSessionActive) {
+            Text(
+                "PLANNED DURATION",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 2.sp,
+            )
+            Spacer(modifier = Modifier.height(spacing.xs))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(spacing.xxs),
+            ) {
+                val suggested = state.insightSuggestedMinutes
+                val options = if (suggested != null && suggested !in DURATION_OPTIONS) {
+                    (DURATION_OPTIONS + suggested).sorted()
+                } else {
+                    DURATION_OPTIONS
+                }
+
+                options.forEach { minutes ->
+                    BrainChoiceChip(
+                        selected = plannedMinutes == minutes,
+                        onClick = {},
+                        label = {
+                            Text(if (minutes == suggested) "${minutes}m ★" else "${minutes}m")
+                        },
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(spacing.md))
+
+            BrainPrimaryButton(
+                text = if (state.isCheckInSubmitting) "Preparing..." else "Start Session",
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.height(56.dp),
+            )
+        } else {
+            val plannedSeconds = activePlannedMinutes * 60L
+            val remaining = plannedSeconds - elapsedSeconds
+            val progress = if (plannedSeconds > 0) {
+                (elapsedSeconds.toFloat() / plannedSeconds.toFloat()).coerceIn(0f, 2f)
+            } else {
+                0f
+            }
+            val isOvertime = remaining < 0
+
+            BrainCard(
+                modifier = Modifier.fillMaxWidth(),
+                containerColor = BrainplanerTheme.surfaceRoles.surface2,
+            ) {
+                Column(
+                    modifier = Modifier.padding(spacing.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        if (isPaused) "PAUSED" else if (isOvertime) "OVERTIME" else "SESSION ACTIVE",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isPaused) BudgetYellow else if (isOvertime) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        letterSpacing = 2.sp,
+                    )
+                    Spacer(modifier = Modifier.height(spacing.md))
+                    SessionTimerRing(
+                        progress = progress,
+                        isOvertime = isOvertime,
+                        modifier = Modifier.size(180.dp),
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                formatDuration(elapsedSeconds),
+                                style = MaterialTheme.typography.displayMedium,
+                            )
+                            Text(
+                                if (remaining >= 0) "-${formatDuration(remaining)}" else "+${formatDuration(-remaining)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isOvertime) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(spacing.xs))
+                    Text(
+                        "Planned: ${activePlannedMinutes}m",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(spacing.sm))
+
+            BrainPrimaryButton(
+                text = if (isPaused) "▶ Resume" else "⏸ Pause",
+                onClick = {},
+                enabled = false,
+                containerColor = if (isPaused) BudgetGreen else BudgetYellow,
+                modifier = Modifier.height(48.dp),
+            )
+
+            Spacer(modifier = Modifier.height(spacing.xs))
+
+            BrainDangerButton(
+                text = "Stop Session",
+                onClick = {},
+                enabled = false,
+                modifier = Modifier.height(56.dp),
+            )
+        }
+
+        actionMessage?.let {
+            Spacer(modifier = Modifier.height(spacing.xs))
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(spacing.md))
+    }
+}
+
+@Preview(name = "Home Loading", showBackground = true)
+@Composable
+private fun HomePreviewLoading() {
+    BrainplanerPhoneTheme(darkTheme = false) {
+        HomePreviewContent(state = HomeUiState(isLoading = true))
+    }
+}
+
+@Preview(name = "Home Ready", showBackground = true)
+@Composable
+private fun HomePreviewReady() {
+    BrainplanerPhoneTheme(darkTheme = false) {
+        HomePreviewContent(
+            state = HomeUiState(
+                isLoading = false,
+                readinessScore = "76",
+                sessionSummary = "Strong coding block with steady pace.",
+                handoffNextAction = "Open coaching.py and finish the recovery endpoint.",
+                insightEvidence = "You usually do better with a 30 minute warm start.",
+                insightPrompt = "Start smaller, then extend if focus stays stable.",
+                insightSuggestedMinutes = 30,
+                lastCloudSyncAtMs = 1L,
+            ),
+            plannedMinutes = 30,
+        )
+    }
+}
+
+@Preview(name = "Home Offline", showBackground = true)
+@Composable
+private fun HomePreviewOffline() {
+    BrainplanerPhoneTheme(darkTheme = false) {
+        HomePreviewContent(
+            state = HomeUiState(
+                isLoading = false,
+                readinessScore = "54",
+                isOffline = true,
+                cloudErrorReason = "Cloud wake-up delay",
+                sessionSummary = "Last session drifted in the final 10 minutes.",
+                handoffNextAction = "Review the readiness score weights.",
+            ),
+            actionMessage = "Using local data until sync returns",
+        )
+    }
+}
+
+@Preview(name = "Home Active", showBackground = true)
+@Composable
+private fun HomePreviewActive() {
+    BrainplanerPhoneTheme(darkTheme = true) {
+        HomePreviewContent(
+            state = HomeUiState(
+                isLoading = false,
+                readinessScore = "68",
+                sessionSummary = "Deep work block in progress.",
+                handoffNextAction = "Summarize the recovery heuristics.",
+                lastCloudSyncAtMs = 1L,
+            ),
+            isSessionActive = true,
+            activePlannedMinutes = 45,
+            elapsedSeconds = 27 * 60L,
+        )
+    }
+}
+
+@Preview(name = "Home Active Font 1.3x", showBackground = true, fontScale = 1.3f)
+@Composable
+private fun HomePreviewActiveFontScale() {
+    BrainplanerPhoneTheme(darkTheme = true) {
+        HomePreviewContent(
+            state = HomeUiState(
+                isLoading = false,
+                readinessScore = "68",
+                sessionSummary = "Deep work block in progress.",
+                handoffNextAction = "Summarize the recovery heuristics.",
+                lastCloudSyncAtMs = 1L,
+            ),
+            isSessionActive = true,
+            activePlannedMinutes = 45,
+            elapsedSeconds = 52 * 60L,
+            isPaused = true,
+        )
     }
 }

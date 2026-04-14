@@ -21,3 +21,23 @@ val LightSurfaceCard = Color(0xFFFFFFFF)
 val BudgetGreen = Color(0xFF00C853)
 val BudgetYellow = Color(0xFFFFD600)
 val BudgetRed = Color(0xFFFF1744)
+
+val BrainInfo = Color(0xFF1E88E5)
+val BrainCritical = Color(0xFFD50000)
+
+// Surface role tokens
+val DarkSurface1 = Color(0xFF171722)
+val DarkSurface2 = Color(0xFF1F2030)
+val DarkSurface3 = Color(0xFF27283C)
+
+val LightSurface1 = Color(0xFFFFFFFF)
+val LightSurface2 = Color(0xFFF3F6FD)
+val LightSurface3 = Color(0xFFEAF0FC)
+
+val StrokeSubtleDark = Color(0xFF3D3F52)
+val StrokeStrongDark = Color(0xFF656881)
+val StrokeSubtleLight = Color(0xFFD8DEEB)
+val StrokeStrongLight = Color(0xFF9CA8BE)
+
+val FocusRing = Color(0xFF00ACC1)
+val OverlayScrim = Color(0x99000000)
